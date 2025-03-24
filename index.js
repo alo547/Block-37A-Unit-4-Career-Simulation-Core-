@@ -29,6 +29,27 @@ app.post('/api/items', async (req, res, next) => {
     }
 });
 
+app.get('/api/items/:itemId', async (req, res, next) => {
+    try {
+        const { itemId } = req.params;
+
+        const result = await client.query(
+            'SELECT * FROM items WHERE id = $1',
+            [itemId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        res.send(result.rows[0]);
+    } catch (ex) {
+        console.error(ex);
+        next(ex);
+    }
+});
+
+// POST /api/auth/register
 app.post('/api/users', async (req, res, next) => {
     try {
         const { username, password } = req.body;
@@ -37,6 +58,17 @@ app.post('/api/users', async (req, res, next) => {
     } catch (ex) {
         console.error(ex)
         res.status(401).send({ error: ex });
+    }
+});
+
+app.get('/api/auth/me', isLoggedIn, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const result = await client.query('SELECT id, username FROM users WHERE id = $1', [userId]);
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
@@ -159,7 +191,144 @@ app.delete('/api/reviews/:reviewId', async (req, res) => {
     }
 });
 
-// make sure deleting a review, deletes its comments
+app.delete('/api/users/:userId/comments/:commentId', isLoggedIn, async (req, res) => {
+    try {
+        const { userId, commentId } = req.params;
+
+        if (parseInt(userId) !== req.user.id) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const result = await client.query(
+            'DELETE FROM comments WHERE id = $1 AND user_id = $2 RETURNING *',
+            [commentId, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Comment not found or unauthorized' });
+        }
+
+        res.json({ message: 'Comment deleted', comment: result.rows[0] });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.get('/api/reviews/me', isLoggedIn, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const result = await client.query(
+            'SELECT * FROM reviews WHERE user_id = $1 ORDER BY created_at DESC',
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.get('/api/comments/me', isLoggedIn, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const result = await client.query(
+            'SELECT * FROM comments WHERE user_id = $1 ORDER BY created_at DESC',
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.put('/api/users/:userId/comments/:commentId', isLoggedIn, async (req, res) => {
+    try {
+        const { userId, commentId } = req.params;
+        const { text } = req.body;
+
+        if (parseInt(userId) !== req.user.id) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (!text) {
+            return res.status(400).json({ error: 'Text is required' });
+        }
+
+        const result = await client.query(
+            `UPDATE comments SET text = $1, updated_at = NOW()
+             WHERE id = $2 AND user_id = $3
+             RETURNING *`,
+            [text, commentId, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Comment not found or unauthorized' });
+        }
+
+        res.json({ message: 'Comment updated', comment: result.rows[0] });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.get('/api/items/:itemId/reviews/:reviewId', async (req, res) => {
+    try {
+        const { itemId, reviewId } = req.params;
+        const result = await client.query(
+            'SELECT * FROM reviews WHERE id = $1 AND items_id = $2',
+            [reviewId, itemId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Review not found' });
+        }
+
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.put('/api/users/:userId/reviews/:reviewId', async (req, res) => {
+    try {
+        const { userId, reviewId } = req.params;
+        const { rating, text } = req.body;
+
+        if (!rating || !text) {
+            return res.status(400).json({ error: 'Rating and text are required' });
+        }
+        if (rating < 1 || rating > 5) {
+            return res.status(400).json({ error: 'Rating must be between 1 and 5' });
+        }
+
+        const reviewCheck = await client.query(
+            'SELECT * FROM reviews WHERE id = $1 AND user_id = $2',
+            [reviewId, userId]
+        );
+
+        if (reviewCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Review not found or does not belong to the user' });
+        }
+
+        const result = await client.query(
+            `UPDATE reviews
+             SET rating = $1, text = $2, updated_at = NOW()
+             WHERE id = $3 AND user_id = $4
+             RETURNING *`,
+            [rating, text, reviewId, userId]
+        );
+
+        res.json({ message: 'Review updated', review: result.rows[0] });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
 
 const init = async () => {
     const port = process.env.PORT || 3000;
